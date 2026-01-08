@@ -8,14 +8,12 @@ from twilio.rest import Client
 app = Flask(__name__)
 
 # --- CONFIGURATION ---
-# Render will provide these from the Environment settings you saved
 TWILIO_SID = os.environ.get("TWILIO_SID", "YOUR_SID_HERE") 
 TWILIO_TOKEN = os.environ.get("TWILIO_TOKEN", "YOUR_TOKEN_HERE")
 TWILIO_NUMBER = 'whatsapp:+14155238886'
 
 client = Client(TWILIO_SID, TWILIO_TOKEN)
 
-# In-memory storage for active users
 users = {}
 
 # Conversation States
@@ -25,7 +23,7 @@ users = {}
 
 def get_price(symbol):
     try:
-        # --- UPDATED TO FUTURES API ---
+        # Using Futures API
         url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}"
         resp = requests.get(url, timeout=5).json()
         return float(resp['price'])
@@ -49,7 +47,6 @@ def check_prices():
         if not btc_price or not eth_price:
             return "Error fetching prices", 500
 
-        # Check all active users
         for phone, data in list(users.items()):
             if data.get('state') == MONITORING:
                 btc_pnl = calculate_pnl(btc_price, data['btc_entry'], data['btc_amt'], data['btc_lev'], data['btc_side'])
@@ -58,14 +55,15 @@ def check_prices():
 
                 log_messages.append(f"User {phone[-4:]}: ${total:.2f}")
 
-                # Check if Target Hit
+                # --- MODIFIED: CONTINUOUS NOTIFICATION ---
                 if total >= data['target']:
-                    msg = (f"🚀 *Target Hit!*\n\n"
-                           f"Profit: *${total:.2f}*\n"
-                           f"BTC: ${btc_pnl:.2f}\nETH: ${eth_pnl:.2f}")
+                    msg = (f"🚀 *Profit Target Met!*\n"
+                           f"Current Profit: *${total:.2f}*\n"
+                           f"BTC: ${btc_pnl:.2f}\nETH: ${eth_pnl:.2f}\n\n"
+                           f"Bot is still monitoring. Send 'stop' to end.")
                     try:
                         client.messages.create(from_=TWILIO_NUMBER, to=phone, body=msg)
-                        users[phone]['state'] = -1  # Stop monitoring
+                        # Removed the line that stops monitoring automatically
                         log_messages.append(f"Alert sent to {phone[-4:]}")
                     except Exception as e:
                         log_messages.append(f"Failed to send alert: {e}")
@@ -75,14 +73,12 @@ def check_prices():
     except Exception as e:
         return f"Error: {e}", 500
 
-# --- WHATSAPP & BROWSER HANDLER ---
+# --- WHATSAPP HANDLER ---
 @app.route("/", methods=['GET', 'POST'])
 def bot():
-    # 1. Browser Check (GET)
     if request.method == 'GET':
         return "✅ WhatsApp Futures Bot is Running!", 200
 
-    # 2. WhatsApp Logic (POST)
     incoming_msg = request.values.get('Body', '').strip().lower()
     sender = request.values.get('From')
     resp = MessagingResponse()
@@ -93,7 +89,13 @@ def bot():
 
     state = users[sender]['state']
 
-    # --- COMMANDS ---
+    # --- NEW COMMAND: STOP ---
+    if incoming_msg == 'stop':
+        users[sender]['state'] = -1
+        msg.body("🛑 Monitoring Stopped.\nProfit locked in? Send 'setup' for next trade.")
+        return str(resp)
+
+    # --- EXISTING COMMANDS ---
     if incoming_msg == 'setup':
         users[sender]['state'] = BTC_SIDE
         msg.body("Let's start.\nAre you *Long* or *Short* on BTC?")
@@ -107,11 +109,11 @@ def bot():
             if b and e:
                 bp = calculate_pnl(b, d['btc_entry'], d['btc_amt'], d['btc_lev'], d['btc_side'])
                 ep = calculate_pnl(e, d['eth_entry'], d['eth_amt'], d['eth_lev'], d['eth_side'])
-                msg.body(f"📊 *Futures Status*\nCurrent PnL: ${bp+ep:.2f}\nBTC Price: {b}\nETH Price: {e}")
+                msg.body(f"📊 *Live Status*\nPnL: ${bp+ep:.2f}\nTarget: ${d['target']}")
             else:
                 msg.body("Error fetching prices.")
 
-    # --- WIZARD STEPS ---
+    # --- WIZARD STEPS (Same as before) ---
     elif state == BTC_SIDE:
         if incoming_msg in ['long', 'short']:
             users[sender]['btc_side'] = incoming_msg
@@ -172,11 +174,11 @@ def bot():
         try:
             users[sender]['target'] = float(incoming_msg)
             users[sender]['state'] = MONITORING
-            msg.body("✅ Setup Saved & Monitoring Futures!")
+            msg.body("✅ Monitoring started!\nI will alert you every minute once target is hit.")
         except: msg.body("Numbers only.")
 
     else:
-        msg.body("Send 'setup' to start.")
+        msg.body("Send 'setup' to start or 'stop' to end.")
 
     return str(resp)
 
