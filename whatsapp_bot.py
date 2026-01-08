@@ -14,8 +14,6 @@ TWILIO_NUMBER = 'whatsapp:+14155238886'
 
 client = Client(TWILIO_SID, TWILIO_TOKEN)
 
-# In-memory storage (Note: On Render Free, this resets if the app sleeps long enough.
-# For permanent storage, you'd need a database, but this works if kept awake).
 users = {}
 
 (BTC_SIDE, BTC_ENTRY, BTC_AMT, BTC_LEV, 
@@ -36,10 +34,9 @@ def calculate_pnl(current, entry, amt, lev, side):
     else:
         return ((entry - current) / entry) * amt * lev
 
-# --- THE TRIGGER ROUTE (Run this every 1 min) ---
+# --- CRON JOB TRIGGER ---
 @app.route("/check", methods=['GET'])
 def check_prices():
-    # This function checks prices once for all active users
     log_messages = []
     try:
         btc_price = get_price("BTCUSDT")
@@ -48,10 +45,8 @@ def check_prices():
         if not btc_price or not eth_price:
             return "Error fetching prices", 500
 
-        # Loop through users
         for phone, data in list(users.items()):
             if data.get('state') == MONITORING:
-                
                 btc_pnl = calculate_pnl(btc_price, data['btc_entry'], data['btc_amt'], data['btc_lev'], data['btc_side'])
                 eth_pnl = calculate_pnl(eth_price, data['eth_entry'], data['eth_amt'], data['eth_lev'], data['eth_side'])
                 total = btc_pnl + eth_pnl
@@ -62,10 +57,9 @@ def check_prices():
                     msg = (f"🚀 *Target Hit!*\n\n"
                            f"Profit: *${total:.2f}*\n"
                            f"BTC: ${btc_pnl:.2f}\nETH: ${eth_pnl:.2f}")
-                    
                     try:
                         client.messages.create(from_=TWILIO_NUMBER, to=phone, body=msg)
-                        users[phone]['state'] = -1  # Stop monitoring
+                        users[phone]['state'] = -1
                         log_messages.append(f"Alert sent to {phone[-4:]}")
                     except Exception as e:
                         log_messages.append(f"Failed to send alert: {e}")
@@ -75,9 +69,14 @@ def check_prices():
     except Exception as e:
         return f"Error: {e}", 500
 
-# --- WHATSAPP HANDLER ---
-@app.route("/", methods=['POST'])
+# --- MAIN ROUTE ---
+@app.route("/", methods=['GET', 'POST'])
 def bot():
+    # Browser Check
+    if request.method == 'GET':
+        return "✅ WhatsApp Bot is Running!", 200
+
+    # WhatsApp Logic
     incoming_msg = request.values.get('Body', '').strip().lower()
     sender = request.values.get('From')
     resp = MessagingResponse()
@@ -88,7 +87,6 @@ def bot():
 
     state = users[sender]['state']
 
-    # --- COMMANDS ---
     if incoming_msg == 'setup':
         users[sender]['state'] = BTC_SIDE
         msg.body("Let's start.\nAre you *Long* or *Short* on BTC?")
@@ -106,7 +104,6 @@ def bot():
             else:
                 msg.body("Error fetching prices.")
 
-    # --- WIZARD STEPS ---
     elif state == BTC_SIDE:
         if incoming_msg in ['long', 'short']:
             users[sender]['btc_side'] = incoming_msg
