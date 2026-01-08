@@ -1,0 +1,14 @@
+# Virtual Environment
+venv/
+env/
+.env
+
+# Python compilation files
+__pycache__/
+*.pyc
+
+# VS Code settings
+.vscode/
+
+# Mac OS junk files
+.DS_Store
